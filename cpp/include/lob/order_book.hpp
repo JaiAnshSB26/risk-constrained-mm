@@ -3,32 +3,33 @@
 // ============================================================================
 // The central Limit Order Book.
 //
-// Architecture (Phase 1 skeleton — matching logic added in Phase 3):
+// Architecture:
 //
 //   Price-level index
 //   ─────────────────
-//   We use a flat, pre-allocated array indexed by a *price offset* from a
-//   configurable base price.  For crypto pairs with bounded tick ranges this
-//   gives O(1) price-level lookup with perfect cache locality.
-//
-//   For instruments where the price range is very wide  we will swap in
-//   a robin-hood hash map in Phase 2 (behind a compile-time policy).
+//   Flat, pre-allocated arrays (one per side) indexed by a price offset from
+//   a configurable base price.  O(1) lookup with perfect cache locality.
 //
 //   Best bid / ask tracking
 //   ───────────────────────
-//   Maintained as simple Price members updated on every insert / cancel.
+//   Maintained as Price members, updated on every insert / cancel.
+//   On cancel of the current best, we scan the level array to find the next
+//   non-empty level — O(gap) worst-case but O(1) amortised.
 //
 //   Order lookup by ID
 //   ──────────────────
-//   A flat array indexed by (id % capacity) or a robin-hood map provides
-//   O(1) cancel.  Implemented in Phase 2 with the full add/cancel API.
+//   A custom open-addressing hash map (OrderMap) pre-allocated at init
+//   provides O(1) insert / find / erase with zero hot-path allocation.
 //
-// This header defines the public interface that the matching engine and
-// the Python bindings will program against.
+// Public API:
+//   add_order()    — allocate from pool, register in map, push to queue.
+//   cancel_order() — lookup in map, unlink from queue, return to pool.
+//   (Matching engine crossing logic will be added in Phase 3.)
 // ============================================================================
 #pragma once
 
 #include "lob/order.hpp"
+#include "lob/order_map.hpp"
 #include "lob/order_queue.hpp"
 #include "lob/pool.hpp"
 #include "lob/price_level.hpp"
@@ -70,7 +71,10 @@ public:
           bid_levels_(new PriceLevel[cfg.num_levels]),
           ask_levels_(new PriceLevel[cfg.num_levels]),
           best_bid_(std::numeric_limits<Price>::min()),
-          best_ask_(std::numeric_limits<Price>::max()) {
+          best_ask_(std::numeric_limits<Price>::max()),
+          order_map_(PoolCap) {
+        assert(cfg_.tick_size > 0);
+        assert(cfg_.num_levels > 0);
         // Stamp each level with its price.
         for (std::size_t i = 0; i < cfg_.num_levels; ++i) {
             bid_levels_[i].price = cfg_.base_price + static_cast<Price>(i) * cfg_.tick_size;
@@ -89,9 +93,9 @@ public:
     [[nodiscard]] Price best_ask() const noexcept { return best_ask_; }
     [[nodiscard]] Price spread()   const noexcept { return best_ask_ - best_bid_; }
 
-    [[nodiscard]] const BookConfig& config() const noexcept { return cfg_; }
-
+    [[nodiscard]] const BookConfig& config()    const noexcept { return cfg_; }
     [[nodiscard]] const OrderPool<PoolCap>& pool() const noexcept { return pool_; }
+    [[nodiscard]] const OrderMap& order_map()   const noexcept { return order_map_; }
 
     // ── Price-level access ──────────────────────────────────────────────────
     /// Returns the PriceLevel for the given price on the specified side.
@@ -106,10 +110,103 @@ public:
         return (side == Side::Bid) ? bid_levels_[idx] : ask_levels_[idx];
     }
 
-    // ── Phase 2/3 stubs ─────────────────────────────────────────────────────
-    // These will be implemented in Phases 2 & 3.
-    // Order* add_order(Side, Price, Qty, Timestamp);
-    // bool   cancel_order(OrderId);
+    // ── Order Management ────────────────────────────────────────────────────
+
+    /// Place a new limit order on the book.
+    ///
+    /// Returns a raw pointer to the order in the pool on success, or nullptr
+    /// if the pool is exhausted, the ID is a duplicate, or the map is full.
+    ///
+    /// Hot-path: zero heap allocation — pool.allocate() + map.insert() +
+    ///           queue.push_back() are all O(1) from pre-allocated storage.
+    [[nodiscard]] Order* add_order(OrderId id, Side side, Price price, Qty qty,
+                                   Timestamp ts = 0) noexcept {
+        assert(id != INVALID_ORDER_ID);
+        assert(qty > 0);
+        assert(price >= cfg_.base_price);
+        assert(price_to_index(price) < cfg_.num_levels);
+
+        // 1. Acquire a slot from the memory pool.
+        Order* order = pool_.allocate();
+        if (order == nullptr) return nullptr;  // pool exhausted
+
+        // 2. Populate order fields.
+        order->id        = id;
+        order->side      = side;
+        order->type      = OrderType::Limit;
+        order->status    = OrderStatus::New;
+        order->price     = price;
+        order->qty       = qty;
+        order->filled    = 0;
+        order->seq       = next_seq_++;
+        order->timestamp = ts;
+
+        // 3. Register in the O(1) ID lookup map.
+        if (!order_map_.insert(id, order)) {
+            // Duplicate ID or map full — roll back the pool allocation.
+            pool_.deallocate(order);
+            return nullptr;
+        }
+
+        // 4. Append to the price-level queue (FIFO / time priority).
+        auto& lvl = level(side, price);
+        lvl.queue.push_back(order);
+
+        // 5. Update best bid / ask.
+        if (side == Side::Bid && price > best_bid_) {
+            best_bid_ = price;
+        } else if (side == Side::Ask && price < best_ask_) {
+            best_ask_ = price;
+        }
+
+        return order;
+    }
+
+    /// Cancel an existing order by its ID.
+    ///
+    /// Returns true if the order was found and removed, false if the ID is
+    /// unknown (safe no-op).
+    ///
+    /// Hot-path: O(1) map lookup + O(1) intrusive-list unlink + O(1) pool
+    ///           dealloc.  If the cancelled order was at the current best
+    ///           price and the level is now empty, a linear scan finds the
+    ///           next non-empty level.
+    bool cancel_order(OrderId id) noexcept {
+        // 1. O(1) lookup.
+        Order* order = order_map_.find(id);
+        if (order == nullptr) return false;
+
+        Side  side  = order->side;
+        Price price = order->price;
+
+        // 2. O(1) unlink from the price-level queue.
+        auto& lvl = level(side, price);
+        lvl.queue.remove(order);
+
+        // 3. Remove from the ID map.
+        order_map_.erase(id);
+
+        // 4. Return slot to the memory pool (calls order->reset()).
+        pool_.deallocate(order);
+
+        // 5. If this level is now empty and it was the best, rescan.
+        if (lvl.queue.empty()) {
+            if (side == Side::Bid && price == best_bid_) {
+                best_bid_ = scan_best_bid(price);
+            } else if (side == Side::Ask && price == best_ask_) {
+                best_ask_ = scan_best_ask(price);
+            }
+        }
+
+        return true;
+    }
+
+    /// Look up an active order by ID.  Returns nullptr if not found.
+    [[nodiscard]] Order* find_order(OrderId id) const noexcept {
+        return order_map_.find(id);
+    }
+
+    // ── Phase 3 stub ────────────────────────────────────────────────────────
     // std::span<Trade> match();
 
 protected:
@@ -120,13 +217,37 @@ protected:
         return idx;
     }
 
+    /// Scan downward from `from` (exclusive) to find the next non-empty bid.
+    /// Returns the sentinel min if no bids remain.
+    [[nodiscard]] Price scan_best_bid(Price from) const noexcept {
+        std::size_t idx = price_to_index(from);
+        while (idx > 0) {
+            --idx;
+            if (!bid_levels_[idx].queue.empty()) {
+                return bid_levels_[idx].price;
+            }
+        }
+        return std::numeric_limits<Price>::min();
+    }
+
+    /// Scan upward from `from` (exclusive) to find the next non-empty ask.
+    /// Returns the sentinel max if no asks remain.
+    [[nodiscard]] Price scan_best_ask(Price from) const noexcept {
+        std::size_t idx = price_to_index(from);
+        for (std::size_t i = idx + 1; i < cfg_.num_levels; ++i) {
+            if (!ask_levels_[i].queue.empty()) {
+                return ask_levels_[i].price;
+            }
+        }
+        return std::numeric_limits<Price>::max();
+    }
+
     // ── Data ────────────────────────────────────────────────────────────────
     BookConfig cfg_;
 
     // Flat arrays of price levels — one per side.
     // Heap-allocated once at construction via unique_ptr<PriceLevel[]>,
     // giving contiguous, cache-friendly storage without blowing the stack.
-    // PriceLevel is non-movable (contains OrderQueue), so we use array-new.
     std::unique_ptr<PriceLevel[]> bid_levels_;
     std::unique_ptr<PriceLevel[]> ask_levels_;
 
@@ -134,6 +255,7 @@ protected:
     Price best_ask_;
 
     OrderPool<PoolCap> pool_;
+    OrderMap            order_map_;
 
     Sequence next_seq_ = 1;   // monotonic sequence counter
 };
