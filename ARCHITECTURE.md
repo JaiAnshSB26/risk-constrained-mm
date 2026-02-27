@@ -33,6 +33,7 @@ risk-constrained-mm/
 │   │   │   ├── pool.hpp         # Zero-allocation OrderPool (free-list)
 │   │   │   ├── order_queue.hpp  # Intrusive doubly-linked list (price level)
 │   │   │   ├── price_level.hpp  # Price → OrderQueue binding
+│   │   │   ├── order_map.hpp    # O(1) OrderId → Order* hash map
 │   │   │   └── order_book.hpp   # Central LOB with flat price-level arrays
 │   │   ├── engine/       # Matching engine (Phase 3)
 │   │   ├── sim/          # Hawkes process simulator (Phase 5)
@@ -90,6 +91,7 @@ initialization:
 | `OrderPool`   | `std::array<Order, N>` with free-list (LIFO)        |
 | `OrderQueue`  | Intrusive doubly-linked list (ptrs inside `Order`)   |
 | `PriceLevel`  | `unique_ptr<PriceLevel[]>` — allocated once at init  |
+| `OrderMap`    | Open-addressing hash table — allocated once at init  |
 | `OrderBook`   | Flat contiguous arrays per side, O(1) price lookup   |
 
 **Why no `std::map`?**  `std::map` performs one `new` per insert (red-black
@@ -120,7 +122,49 @@ static_assert(std::is_trivially_copyable_v<Order>);
 Hot fields (price, qty, pointers) are packed near each other to maximize
 cache-line utilization during matching.
 
-### 4.3 Price Representation
+### 4.3 OrderMap — O(1) Order Lookup
+
+The `OrderMap` provides constant-time `OrderId → Order*` lookup, insert, and
+delete with zero hot-path allocation:
+
+| Property              | Detail                                            |
+|-----------------------|---------------------------------------------------|
+| Hash algorithm        | **splitmix64 finalizer** (excellent avalanche)     |
+| Collision strategy    | **Linear probing** with power-of-2 table           |
+| Deletion strategy     | **Backward-shift** — no tombstones, keeps chains   |
+| Load factor           | ≤ 50 % (table sized ≥ 2× `PoolCap`)               |
+| Capacity              | Rounded to next power-of-2 ≥ 2 × `max_elements`   |
+| Memory                | Single `unique_ptr<Slot[]>` allocated at init      |
+
+**Why not `std::unordered_map`?**  It performs one `new` per bucket/node
+insertion and has unpredictable rehash stalls.  Our pre-sized open-addressing
+table guarantees no allocation after construction and achieves excellent
+cache locality for sequential probes.
+
+### 4.4 Add / Cancel API
+
+```
+add_order(id, side, price, qty, ts)  →  Order*   (nullptr on failure)
+cancel_order(id)                     →  bool     (false if not found)
+find_order(id)                       →  Order*   (nullptr if not found)
+```
+
+**`add_order` hot path** (zero allocation):
+1. `pool_.allocate()` — O(1) free-list pop
+2. Set order fields + assign monotonic sequence number
+3. `order_map_.insert(id, ptr)` — O(1) amortized hash insert
+4. `level.queue.push_back(ptr)` — O(1) intrusive list append
+5. Update `best_bid_` / `best_ask_` — O(1) compare
+
+**`cancel_order` hot path**:
+1. `order_map_.find(id)` — O(1) hash lookup
+2. `level.queue.remove(ptr)` — O(1) intrusive unlink
+3. `order_map_.erase(id)` — O(1) backward-shift delete
+4. `pool_.deallocate(ptr)` — O(1) free-list push
+5. If level is now empty and was best, **scan** for new best — O(levels) worst
+   case, O(1) amortized
+
+### 4.5 Price Representation
 
 Prices are stored as **`int64_t` tick units**, not floating-point:
 
@@ -128,7 +172,7 @@ Prices are stored as **`int64_t` tick units**, not floating-point:
 - Integer compare/arithmetic is faster and deterministic.
 - For BTC/USDT with tick = 0.01 USDT, price 65432.10 → `6'543'210`.
 
-### 4.4 Compiler Discipline
+### 4.6 Compiler Discipline
 
 | Flag                | Purpose                                              |
 |---------------------|------------------------------------------------------|
@@ -147,7 +191,7 @@ not to third-party dependencies (Catch2, pybind11).
 | Phase | Description                          | Status      |
 |-------|--------------------------------------|-------------|
 | 1     | Foundation, Build System & Git Init  | **Complete** |
-| 2     | High-Performance C++ LOB Data Structs | Planned     |
+| 2     | High-Performance LOB API & O(1) Lookup | **Complete** |
 | 3     | Matching Engine Core                 | Planned     |
 | 4     | Crypto Data Ingestion & Replay       | Planned     |
 | 5     | Hawkes Process Market Simulator      | Planned     |
