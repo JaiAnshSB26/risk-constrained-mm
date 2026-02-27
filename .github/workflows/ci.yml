@@ -1,0 +1,78 @@
+# ============================================================================
+# risk-constrained-mm :: .github/workflows/ci.yml
+# ============================================================================
+# Continuous Integration — runs on every push and pull request.
+#
+# Matrix:
+#   • C++ build + Catch2 tests  (Ubuntu latest, GCC 13 + Clang 17)
+#   • Python pytest suite       (Ubuntu latest, Python 3.12)
+# ============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── C++ Build & Test ─────────────────────────────────────────────────────
+  cpp:
+    name: C++ (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc-13
+            cc: gcc-13
+            cxx: g++-13
+          - compiler: clang-17
+            cc: clang-17
+            cxx: clang++-17
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ${{ matrix.cc }} ${{ matrix.cxx || '' }}
+
+      - name: Configure CMake
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure -j$(nproc)
+
+  # ── Python Tests ─────────────────────────────────────────────────────────
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy gymnasium pytest
+
+      - name: Run pytest
+        run: python -m pytest tests/python/ -v --tb=short
