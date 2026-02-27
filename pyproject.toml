@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel", "pybind11>=2.12"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "risk-constrained-mm"
+version = "0.1.0"
+description = "Risk-Constrained RL Market-Making Agent on a High-Performance C++ LOB"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Risk-Constrained MM Team"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "gymnasium>=0.29",
+]
+
+[project.optional-dependencies]
+rl = [
+    "torch>=2.1",
+    "tensorboard>=2.14",
+    "wandb>=0.16",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-benchmark>=4.0",
+    "pytest-cov>=4.1",
+    "ruff>=0.2",
+    "mypy>=1.8",
+]
+data = [
+    "pandas>=2.1",
+    "tardis-dev>=2.0",
+]
+all = [
+    "risk-constrained-mm[rl,dev,data]",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks integration tests requiring the C++ module",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
