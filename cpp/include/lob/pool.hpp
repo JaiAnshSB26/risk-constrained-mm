@@ -68,7 +68,9 @@ public:
 
     /// True if `order` points into our storage array.
     [[nodiscard]] bool owns(const Order* order) const noexcept {
-        return order >= &storage_[0] && order < &storage_[Capacity];
+        const Order* begin = storage_.data();
+        const Order* end   = storage_.data() + Capacity;
+        return order >= begin && order < end;
     }
 
 private:

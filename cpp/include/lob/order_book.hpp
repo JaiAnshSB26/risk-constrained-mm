@@ -34,9 +34,10 @@
 #include "lob/price_level.hpp"
 #include "lob/types.hpp"
 
-#include <array>
+#include <cassert>
 #include <cstddef>
 #include <limits>
+#include <memory>
 
 namespace rcmm {
 
@@ -64,8 +65,10 @@ template <std::size_t PoolCap = MAX_ORDERS>
 class OrderBook {
 public:
     // ── Construction ────────────────────────────────────────────────────────
-    explicit OrderBook(BookConfig cfg = {}) noexcept
+    explicit OrderBook(BookConfig cfg = {})
         : cfg_(cfg),
+          bid_levels_(new PriceLevel[cfg.num_levels]),
+          ask_levels_(new PriceLevel[cfg.num_levels]),
           best_bid_(std::numeric_limits<Price>::min()),
           best_ask_(std::numeric_limits<Price>::max()) {
         // Stamp each level with its price.
@@ -121,11 +124,11 @@ protected:
     BookConfig cfg_;
 
     // Flat arrays of price levels — one per side.
-    // Heap-allocated via std::vector to allow runtime cfg_.num_levels sizing
-    // while still providing contiguous, cache-friendly storage.
-    // For Phase 1 we use a fixed std::array sized to MAX_PRICE_LEVELS.
-    std::array<PriceLevel, MAX_PRICE_LEVELS> bid_levels_{};
-    std::array<PriceLevel, MAX_PRICE_LEVELS> ask_levels_{};
+    // Heap-allocated once at construction via unique_ptr<PriceLevel[]>,
+    // giving contiguous, cache-friendly storage without blowing the stack.
+    // PriceLevel is non-movable (contains OrderQueue), so we use array-new.
+    std::unique_ptr<PriceLevel[]> bid_levels_;
+    std::unique_ptr<PriceLevel[]> ask_levels_;
 
     Price best_bid_;
     Price best_ask_;

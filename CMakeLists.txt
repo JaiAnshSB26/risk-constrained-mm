@@ -17,27 +17,29 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)        # no GNU extensions — strict ISO C++20
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON) # for clangd / IDE integration
 
-# Aggressive warning flags
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options(
-        -Wall -Wextra -Wpedantic -Werror
-        -Wconversion -Wsign-conversion -Wshadow
-        -Wnon-virtual-dtor -Wold-style-cast -Wcast-align
-        -Woverloaded-virtual -Wformat=2
-        -fno-exceptions    # hot-path must never throw
-    )
-    # Release-mode: enable LTO and architecture-native tuning
-    if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        add_compile_options(-O3 -march=native -flto)
-        add_link_options(-flto)
+# Aggressive warning flags — applied only to OUR targets (not fetched deps).
+# We use a function to apply them so they don't leak to Catch2/pybind11.
+function(rcmm_set_strict_warnings target)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+            -Wconversion -Wsign-conversion -Wshadow
+            -Wnon-virtual-dtor -Wold-style-cast -Wcast-align
+            -Woverloaded-virtual -Wformat=2
+            -fno-exceptions    # hot-path must never throw
+        )
+        if(CMAKE_BUILD_TYPE STREQUAL "Release")
+            target_compile_options(${target} PRIVATE -O3 -march=native -flto)
+            target_link_options(${target} PRIVATE -flto)
+        endif()
+    elseif(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /WX /permissive- /Zc:__cplusplus)
+        if(CMAKE_BUILD_TYPE STREQUAL "Release")
+            target_compile_options(${target} PRIVATE /O2 /GL)
+            target_link_options(${target} PRIVATE /LTCG)
+        endif()
     endif()
-elseif(MSVC)
-    add_compile_options(/W4 /WX /permissive- /Zc:__cplusplus)
-    if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        add_compile_options(/O2 /GL)
-        add_link_options(/LTCG)
-    endif()
-endif()
+endfunction()
 
 # ── FetchContent: external dependencies ──────────────────────────────────────
 include(FetchContent)
@@ -68,6 +70,7 @@ file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS "cpp/src/*.cpp")
 add_library(lob_core STATIC ${LIB_SOURCES})
 target_include_directories(lob_core PUBLIC cpp/include)
 target_compile_features(lob_core PUBLIC cxx_std_20)
+rcmm_set_strict_warnings(lob_core)
 
 # ── Testing ──────────────────────────────────────────────────────────────────
 enable_testing()
@@ -76,9 +79,10 @@ file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS "tests/cpp/*.cpp")
 
 add_executable(unit_tests ${TEST_SOURCES})
 target_link_libraries(unit_tests PRIVATE lob_core Catch2::Catch2WithMain)
+rcmm_set_strict_warnings(unit_tests)
 
 # Register with CTest so `ctest` works out of the box
-include(Catch2::Catch2WithMain)
+list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(CTest)
 include(Catch)
 catch_discover_tests(unit_tests)
