@@ -172,7 +172,58 @@ Prices are stored as **`int64_t` tick units**, not floating-point:
 - Integer compare/arithmetic is faster and deterministic.
 - For BTC/USDT with tick = 0.01 USDT, price 65432.10 → `6'543'210`.
 
-### 4.6 Compiler Discipline
+### 4.6 Matching Engine — Price-Time Priority
+
+The `place_order()` API is the single entry-point for aggressive order flow.
+It performs crossing (matching) before optionally resting the remainder.
+
+```
+place_order(id, price, qty, side, type, ts)  →  std::vector<Trade>
+```
+
+**Matching loop** (Price priority × Time priority):
+
+```
+1. While remaining_qty > 0 AND opposite side has resting orders:
+     a. Check price limit (Limit orders only).
+     b. Walk the best-price level’s OrderQueue from HEAD (oldest = time prio).
+     c. For each maker order:
+        • fill = min(remaining, maker.leaves())
+        • Emit Trade{maker_id, taker_id, price, fill}.
+        • If maker fully filled → remove from queue, erase from map,
+          return to pool.
+        • If partially filled → update maker.filled, set PartialFill status.
+     d. If level is empty → scan_best_ask / scan_best_bid for next level.
+2. If Limit order AND remaining > 0 → add_order() to rest on the book.
+3. Return trades vector.
+```
+
+**Order type behaviour:**
+
+| Type   | Matches at | Rests remainder? |
+|--------|---------------------------------------------|------------------|
+| Limit  | Opposite levels with favorable price | Yes |
+| Market | All opposite levels regardless of price | Never |
+
+**Trade struct:**
+
+```cpp
+struct Trade {
+    OrderId   maker_id;    // resting order that was hit
+    OrderId   taker_id;    // aggressive incoming order
+    Price     price;       // execution price (always maker’s level)
+    Qty       qty;         // filled quantity
+    Side      taker_side;  // direction of the aggressor
+    Timestamp timestamp;   // event time
+};
+static_assert(std::is_trivially_copyable_v<Trade>);
+```
+
+The trades vector is `reserve(64)`’d to minimise reallocation on the
+Python-bridge path.  On the hot C++ path, a pre-allocated ring buffer
+can be substituted in Phase 6.
+
+### 4.7 Compiler Discipline
 
 | Flag                | Purpose                                              |
 |---------------------|------------------------------------------------------|
@@ -192,7 +243,7 @@ not to third-party dependencies (Catch2, pybind11).
 |-------|--------------------------------------|-------------|
 | 1     | Foundation, Build System & Git Init  | **Complete** |
 | 2     | High-Performance LOB API & O(1) Lookup | **Complete** |
-| 3     | Matching Engine Core                 | Planned     |
+| 3     | Matching Engine Core                   | **Complete** |
 | 4     | Crypto Data Ingestion & Replay       | Planned     |
 | 5     | Hawkes Process Market Simulator      | Planned     |
 | 6     | Python Bindings & Gymnasium Env      | Planned     |
