@@ -1,0 +1,80 @@
+# ============================================================================
+# risk-constrained-mm :: .gitignore
+# ============================================================================
+
+# ── C++ / CMake build artifacts ──────────────────────────────────────────────
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+compile_commands.json
+
+# ── IDE / Editor ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cache/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+*.whl
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ── PyTorch / ML artifacts ───────────────────────────────────────────────────
+*.pt
+*.pth
+*.onnx
+checkpoints/
+runs/
+wandb/
+mlruns/
+
+# ── Data (large files — never commit raw market data) ────────────────────────
+data/raw/
+data/cache/
+*.csv.gz
+*.parquet
+*.feather
+*.hdf5
+*.h5
+
+# ── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── Testing / Coverage ──────────────────────────────────────────────────────
+*.gcov
+*.gcda
+*.gcno
+coverage/
+htmlcov/
+.coverage
+.pytest_cache/
