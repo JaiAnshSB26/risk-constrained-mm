@@ -23,6 +23,8 @@ from rcmm.regime_wrapper import (
     NORMAL_REGIME_SPEC,
     FLASH_CRASH_REGIME_SPEC,
 )
+from rcmm.baselines import AvellanedaStoikovAgent, AvellanedaStoikovConfig
+from rcmm.stats import diebold_mariano
 
 __all__ = [
     "LimitOrderBookEnv",
@@ -33,4 +35,7 @@ __all__ = [
     "RegimeSpec",
     "NORMAL_REGIME_SPEC",
     "FLASH_CRASH_REGIME_SPEC",
+    "AvellanedaStoikovAgent",
+    "AvellanedaStoikovConfig",
+    "diebold_mariano",
 ]
