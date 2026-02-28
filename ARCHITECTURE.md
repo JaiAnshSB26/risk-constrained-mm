@@ -289,6 +289,82 @@ timestamp) at any point during replay.
 Flags are applied only to project targets via `rcmm_set_strict_warnings()`,
 not to third-party dependencies (Catch2, pybind11).
 
+### 4.10 Hawkes Process Market Simulator
+
+Phase 5 introduces a **1D Marked Hawkes Process** simulator for generating
+realistic synthetic order-flow with self-exciting clustering — the hallmark
+of high-frequency market microstructure data.
+
+#### 4.10.1 Intensity Function
+
+The conditional intensity of a 1D exponential-kernel Hawkes process is:
+
+$$\lambda(t) \;=\; \mu \;+\; \sum_{t_i < t} \alpha \, e^{-\beta\,(t - t_i)}$$
+
+| Parameter | Meaning                                |
+|-----------|----------------------------------------|
+| $\mu$     | Baseline (background) intensity        |
+| $\alpha$  | Excitation jump per event              |
+| $\beta$   | Exponential decay rate                 |
+
+**Stationarity** requires the branching ratio $\alpha / \beta < 1$.
+The theoretical steady-state expected intensity is
+$E[\lambda] = \mu \, / \, (1 - \alpha/\beta)$.
+
+#### 4.10.2 Regime Presets
+
+| Regime           | $\mu$ | $\alpha$ | $\beta$ | Branching | $E[\lambda]$ |
+|------------------|-------|----------|---------|-----------|---------------|
+| `NORMAL_REGIME`  | 5.0   | 1.5      | 5.0     | 0.30      | ≈ 7.14        |
+| `FLASH_CRASH_REGIME` | 5.0 | 9.5   | 10.0    | 0.95      | 100.0         |
+
+Both are verified at compile time via `static_assert(is_stationary())`.
+
+#### 4.10.3 Ogata's Modified Thinning Algorithm
+
+The `HawkesSimulator` class implements **Ogata's modified thinning** to
+sample exact event times without discretization:
+
+1. Set upper-bound intensity $\bar{\lambda} = \lambda(t)$.
+2. Draw candidate inter-arrival $u \sim \text{Exp}(\bar\lambda)$.
+3. Advance time: $t \mathrel{+}= u$.  Decay:
+   $\lambda(t) = \mu + (\lambda_{\text{prev}} - \mu)\,e^{-\beta\,u}$.
+4. Accept with probability $\lambda(t)\,/\,\bar\lambda$ (thinning step).
+5. On accept: emit event, jump $\lambda \mathrel{+}= \alpha$.
+6. Repeat until the desired number of events is reached.
+
+**RNG**: `std::mt19937_64` seeded at construction; `seed()` method for
+reproducible experiments.  Pre-allocates output via `reserve(num_events)`.
+
+#### 4.10.4 Mark Generation
+
+Each accepted event is assigned a random **mark** (order-flow attributes)
+controlled by the `MarkConfig` struct:
+
+| Mark       | Distribution                                       |
+|------------|----------------------------------------------------|
+| Side       | Bernoulli with configurable `buy_prob` (default 0.5)|
+| Price      | Uniform integer in `[mid - half_spread, mid + half_spread]` |
+| Qty        | Uniform integer in `[min_qty, max_qty]`            |
+| Action     | Categorical: `add_prob` / `cancel_prob` / `trade_prob` / remainder → Modify |
+| `is_trade` | Derived: `action == TickAction::Trade`             |
+| `order_id` | Sequential starting from 1                         |
+
+Output is `std::vector<Tick>` — the same struct used by `ReplayEngine`,
+ensuring full compatibility with the LOB pipeline.
+
+#### 4.10.5 Test Coverage (23 test cases)
+
+| Category   | Tests                                                          |
+|------------|----------------------------------------------------------------|
+| Params     | Stationarity, branching ratio, expected intensity, presets     |
+| Ogata      | 10k-event runs for both regimes; empirical vs theoretical rate |
+| Monotonicity | Strictly increasing timestamps; positive inter-arrival times |
+| Marks      | Side/price/qty/action distributions within statistical bounds  |
+| Regime     | Flash crash arrivals more clustered than normal                |
+| Repro      | Same seed → identical output; reseed → different output        |
+| Edge       | Small simulations (10 events); timestamp offset                |
+
 ---
 
 ## 5. Phase Tracker
@@ -299,7 +375,7 @@ not to third-party dependencies (Catch2, pybind11).
 | 2     | High-Performance LOB API & O(1) Lookup | **Complete** |
 | 3     | Matching Engine Core                   | **Complete** |
 | 4     | Crypto Data Ingestion & Replay       | **Complete** |
-| 5     | Hawkes Process Market Simulator      | Planned     |
+| 5     | Hawkes Process Market Simulator      | **Complete** |
 | 6     | Python Bindings & Gymnasium Env      | Planned     |
 | 7     | Baseline RL Agent & Reward Shaping   | Planned     |
 | 8     | Risk-Constrained RL (Research Core)  | Planned     |
