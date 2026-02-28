@@ -184,3 +184,105 @@ TEST_CASE("Hawkes: Flash crash arrivals are more clustered than normal",
     CHECK(flash_duration < normal_duration);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  Mark Generation
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("Hawkes: marks - order IDs are sequential starting from 1",
+          "[hawkes][marks]") {
+    HawkesSimulator sim(NORMAL_REGIME, {}, 42);
+    auto ticks = sim.simulate(100, 0);
+
+    for (std::size_t i = 0; i < ticks.size(); ++i) {
+        CHECK(ticks[i].order_id == static_cast<OrderId>(i + 1));
+    }
+}
+
+TEST_CASE("Hawkes: marks - side distribution roughly 50/50",
+          "[hawkes][marks]") {
+    MarkConfig mc{};
+    mc.buy_prob = 0.5;
+    HawkesSimulator sim(NORMAL_REGIME, mc, 42);
+    auto ticks = sim.simulate(10000, 0);
+
+    std::size_t bid_count = 0;
+    for (const auto& t : ticks) {
+        if (t.side == Side::Bid) ++bid_count;
+    }
+    double bid_ratio = static_cast<double>(bid_count) / 10000.0;
+    // 50% +/- 3%
+    CHECK(bid_ratio > 0.47);
+    CHECK(bid_ratio < 0.53);
+}
+
+TEST_CASE("Hawkes: marks - prices within configured range",
+          "[hawkes][marks]") {
+    MarkConfig mc{};
+    mc.mid_price   = 50000;
+    mc.half_spread = 10;
+    HawkesSimulator sim(NORMAL_REGIME, mc, 42);
+    auto ticks = sim.simulate(1000, 0);
+
+    for (const auto& t : ticks) {
+        CHECK(t.price >= mc.mid_price - mc.half_spread);
+        CHECK(t.price <= mc.mid_price + mc.half_spread);
+    }
+}
+
+TEST_CASE("Hawkes: marks - quantities within configured range",
+          "[hawkes][marks]") {
+    MarkConfig mc{};
+    mc.min_qty = 1;
+    mc.max_qty = 10;
+    HawkesSimulator sim(NORMAL_REGIME, mc, 42);
+    auto ticks = sim.simulate(1000, 0);
+
+    for (const auto& t : ticks) {
+        CHECK(t.qty >= mc.min_qty);
+        CHECK(t.qty <= mc.max_qty);
+    }
+}
+
+TEST_CASE("Hawkes: marks - action distribution roughly matches config",
+          "[hawkes][marks]") {
+    MarkConfig mc{};
+    mc.add_prob    = 0.6;
+    mc.cancel_prob = 0.2;
+    mc.trade_prob  = 0.2;
+    // modify = 1 - 0.6 - 0.2 - 0.2 = 0.0
+    HawkesSimulator sim(NORMAL_REGIME, mc, 42);
+    auto ticks = sim.simulate(10000, 0);
+
+    std::size_t adds = 0, cancels = 0, trades = 0, modifies = 0;
+    for (const auto& t : ticks) {
+        switch (t.action) {
+        case TickAction::Add:    ++adds;     break;
+        case TickAction::Cancel: ++cancels;  break;
+        case TickAction::Trade:  ++trades;   break;
+        case TickAction::Modify: ++modifies; break;
+        }
+    }
+
+    double add_r = static_cast<double>(adds) / 10000.0;
+    double can_r = static_cast<double>(cancels) / 10000.0;
+    double trd_r = static_cast<double>(trades) / 10000.0;
+
+    // Allow 4% tolerance on 10k samples.
+    CHECK(add_r > 0.56);
+    CHECK(add_r < 0.64);
+    CHECK(can_r > 0.16);
+    CHECK(can_r < 0.24);
+    CHECK(trd_r > 0.16);
+    CHECK(trd_r < 0.24);
+}
+
+TEST_CASE("Hawkes: marks - is_trade flag matches action",
+          "[hawkes][marks]") {
+    HawkesSimulator sim(NORMAL_REGIME, {}, 42);
+    auto ticks = sim.simulate(1000, 0);
+
+    for (const auto& t : ticks) {
+        CHECK(t.is_trade == (t.action == TickAction::Trade));
+    }
+}
+
