@@ -79,3 +79,45 @@ TEST_CASE("Hawkes: FLASH_CRASH_REGIME preset is stationary",
     CHECK(FLASH_CRASH_REGIME.expected_intensity() ==
           Catch::Approx(100.0).epsilon(1e-9));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Ogata's Thinning Algorithm — NORMAL_REGIME (10k events)
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("Hawkes: Normal regime 10k events - empirical intensity matches theory",
+          "[hawkes][ogata][normal]") {
+    HawkesSimulator sim(NORMAL_REGIME, {}, 12345);
+    auto ticks = sim.simulate(10000, 0);
+
+    REQUIRE(ticks.size() == 10000u);
+
+    // Compute total elapsed time (in seconds).
+    double t_start = static_cast<double>(ticks.front().timestamp) * 1e-9;
+    double t_end   = static_cast<double>(ticks.back().timestamp) * 1e-9;
+    double duration = t_end - t_start;
+    REQUIRE(duration > 0.0);
+
+    // Empirical arrival rate = num_events / duration.
+    double empirical = 10000.0 / duration;
+    double theoretical = NORMAL_REGIME.expected_intensity();
+
+    // Allow 10% relative tolerance for 10k samples.
+    double rel_error = std::abs(empirical - theoretical) / theoretical;
+    CHECK(rel_error < 0.10);
+
+    INFO("Normal regime: empirical=" << empirical
+         << " theoretical=" << theoretical
+         << " rel_error=" << rel_error);
+}
+
+TEST_CASE("Hawkes: Normal regime - timestamps strictly increasing",
+          "[hawkes][ogata][normal]") {
+    HawkesSimulator sim(NORMAL_REGIME, {}, 42);
+    auto ticks = sim.simulate(10000, 0);
+
+    REQUIRE(ticks.size() == 10000u);
+
+    for (std::size_t i = 1; i < ticks.size(); ++i) {
+        REQUIRE(ticks[i].timestamp > ticks[i - 1].timestamp);
+    }
+}
