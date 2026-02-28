@@ -121,3 +121,66 @@ TEST_CASE("Hawkes: Normal regime - timestamps strictly increasing",
         REQUIRE(ticks[i].timestamp > ticks[i - 1].timestamp);
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Ogata's Thinning Algorithm — FLASH_CRASH_REGIME (10k events)
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("Hawkes: Flash crash regime 10k events - empirical intensity matches theory",
+          "[hawkes][ogata][flash]") {
+    HawkesSimulator sim(FLASH_CRASH_REGIME, {}, 67890);
+    auto ticks = sim.simulate(10000, 0);
+
+    REQUIRE(ticks.size() == 10000u);
+
+    double t_start = static_cast<double>(ticks.front().timestamp) * 1e-9;
+    double t_end   = static_cast<double>(ticks.back().timestamp) * 1e-9;
+    double duration = t_end - t_start;
+    REQUIRE(duration > 0.0);
+
+    double empirical = 10000.0 / duration;
+    double theoretical = FLASH_CRASH_REGIME.expected_intensity();
+
+    // Flash crash near-criticality (branching 0.95) causes very high
+    // variance;  allow 30% tolerance with 10k samples.
+    double rel_error = std::abs(empirical - theoretical) / theoretical;
+    CHECK(rel_error < 0.30);
+
+    INFO("Flash crash regime: empirical=" << empirical
+         << " theoretical=" << theoretical
+         << " rel_error=" << rel_error);
+}
+
+TEST_CASE("Hawkes: Flash crash regime - timestamps strictly increasing",
+          "[hawkes][ogata][flash]") {
+    HawkesSimulator sim(FLASH_CRASH_REGIME, {}, 11111);
+    auto ticks = sim.simulate(10000, 0);
+
+    REQUIRE(ticks.size() == 10000u);
+
+    for (std::size_t i = 1; i < ticks.size(); ++i) {
+        REQUIRE(ticks[i].timestamp > ticks[i - 1].timestamp);
+    }
+}
+
+TEST_CASE("Hawkes: Flash crash arrivals are more clustered than normal",
+          "[hawkes][ogata][regime]") {
+    // Flash crash should produce events in a shorter time window
+    // (higher intensity => same #events in less wall-clock time).
+    HawkesSimulator sim_normal(NORMAL_REGIME, {}, 42);
+    HawkesSimulator sim_flash(FLASH_CRASH_REGIME, {}, 42);
+
+    auto normal_ticks = sim_normal.simulate(5000, 0);
+    auto flash_ticks  = sim_flash.simulate(5000, 0);
+
+    double normal_duration =
+        static_cast<double>(normal_ticks.back().timestamp -
+                            normal_ticks.front().timestamp) * 1e-9;
+    double flash_duration =
+        static_cast<double>(flash_ticks.back().timestamp -
+                            flash_ticks.front().timestamp) * 1e-9;
+
+    // Flash crash should finish in substantially less time.
+    CHECK(flash_duration < normal_duration);
+}
+
