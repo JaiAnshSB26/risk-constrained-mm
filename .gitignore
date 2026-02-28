@@ -67,6 +67,8 @@ data/cache/
 
 # ── Generated results (OOS evaluation outputs) ──────────────────────────────
 results/
+!results/plots/
+!results/plots/*.png
 
 # ── Jupyter ──────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
