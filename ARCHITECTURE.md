@@ -35,6 +35,10 @@ risk-constrained-mm/
 │   │   │   ├── price_level.hpp  # Price → OrderQueue binding
 │   │   │   ├── order_map.hpp    # O(1) OrderId → Order* hash map
 │   │   │   └── order_book.hpp   # Central LOB with flat price-level arrays
+│   │   ├── data/         # Data ingestion (Phase 4)
+│   │   │   ├── tick.hpp             # Tick struct + TickAction enum
+│   │   │   ├── market_data_parser.hpp # Zero-alloc CSV parser
+│   │   │   └── replay_engine.hpp    # Historical tick replay
 │   │   ├── engine/       # Matching engine (Phase 3)
 │   │   ├── sim/          # Hawkes process simulator (Phase 5)
 │   │   └── data/         # Tardis.dev / Binance parser (Phase 4)
@@ -223,7 +227,57 @@ The trades vector is `reserve(64)`’d to minimise reallocation on the
 Python-bridge path.  On the hot C++ path, a pre-allocated ring buffer
 can be substituted in Phase 6.
 
-### 4.7 Compiler Discipline
+### 4.7 Market Data Parsing — Zero-Allocation I/O
+
+The `MarketDataParser` ingests CSV tick data (Tardis.dev / Binance format)
+with **zero per-row heap allocation**:
+
+| Step              | Technique                                           |
+|-------------------|-----------------------------------------------------|
+| File loading      | Single `fread()` into `std::vector<char>` buffer    |
+| Line splitting    | `string_view::find('\n')` + `remove_prefix()`      |
+| Field extraction  | `string_view::find(',')` + `substr()` (zero-copy)   |
+| Integer parsing   | `std::from_chars` (no locale, no allocation)         |
+| Decimal parsing   | `std::from_chars` → `double`, then `llround(val / tick_size)` |
+
+**CSV format** (first line = header, skipped):
+
+```
+timestamp,action,order_id,side,price,qty
+1609459200000000,add,12345,bid,50000.50,1.500
+```
+
+**Why not `std::getline` / `std::stringstream`?**  Both allocate a new
+`std::string` per call.  For million-row tick files, this produces millions
+of heap allocations.  Our approach performs **zero** allocations during
+parsing — only the output `std::vector<Tick>` allocates (once, via
+`reserve()`).
+
+Decimal-to-integer conversion uses `std::from_chars` (C++17) for the
+floating-point parse, then `std::llround(value / tick_size)` to produce an
+exact integer tick price.  The `ParseConfig` struct controls `tick_size` and
+`lot_size` for price and quantity scaling.
+
+### 4.8 Replay Engine
+
+The `ReplayEngine` applies parsed ticks to a live `OrderBook`:
+
+| Tick Action | OrderBook API Called                        |
+|-------------|---------------------------------------------|
+| `Add`       | `add_order(id, side, price, qty, ts)`       |
+| `Cancel`    | `cancel_order(id)`                          |
+| `Modify`    | `cancel_order(id)` + `add_order(id, ...)`   |
+| `Trade`     | `place_order(id, price, qty, side, Market)`  |
+
+**`replay(ticks)`** processes a batch and returns a `ReplayResult`
+containing all generated trades, the count of processed ticks, and error
+count.  **`replay_one(tick)`** is the single-step API for RL environment
+interaction.
+
+**`top_of_book()`** returns a `TopOfBook` snapshot (best\_bid, best\_ask,
+timestamp) at any point during replay.
+
+### 4.9 Compiler Discipline
 
 | Flag                | Purpose                                              |
 |---------------------|------------------------------------------------------|
@@ -244,7 +298,7 @@ not to third-party dependencies (Catch2, pybind11).
 | 1     | Foundation, Build System & Git Init  | **Complete** |
 | 2     | High-Performance LOB API & O(1) Lookup | **Complete** |
 | 3     | Matching Engine Core                   | **Complete** |
-| 4     | Crypto Data Ingestion & Replay       | Planned     |
+| 4     | Crypto Data Ingestion & Replay       | **Complete** |
 | 5     | Hawkes Process Market Simulator      | Planned     |
 | 6     | Python Bindings & Gymnasium Env      | Planned     |
 | 7     | Baseline RL Agent & Reward Shaping   | Planned     |
