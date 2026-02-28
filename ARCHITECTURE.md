@@ -458,6 +458,110 @@ On Windows with MinGW/UCRT64, `__init__.py` calls
 | Performance     | >10k steps/sec (measured: ~150k steps/sec)               |
 | Gymnasium       | isinstance(env, gym.Env), space containment              |
 
+### 4.12 Baseline RL Agent & Reward Shaping (Phase 7)
+
+Phase 7 implements a clean, hackable PPO agent in PyTorch (CleanRL-style)
+and shapes the reward function for inventory-averse market making.
+
+#### 4.12.1 Reward Function
+
+The reward function implements the standard inventory-averse market-making
+objective:
+
+$$R_t = \Delta \text{PnL}_t - \gamma \cdot (\text{Inventory}_t)^2$$
+
+| Symbol | Meaning | Default |
+|--------|---------|---------|
+| $\Delta \text{PnL}_t$ | Change in mark-to-market PnL | — |
+| $\gamma$ | Inventory aversion coefficient | 0.01 |
+| $\text{Inventory}_t$ | Current net position (signed) | — |
+
+The inventory aversion $\gamma$ is exposed as `EnvConfig.inventory_aversion`
+in C++ and as a keyword argument `inventory_aversion` on the Python
+`LimitOrderBookEnv` constructor.  Mark-to-market uses mid-price:
+$\text{MtM}_t = \text{PnL}_{\text{cash}} + \text{Inventory}_t \times \text{mid}_t$.
+
+#### 4.12.2 Actor-Critic Architecture
+
+```
+obs (22-d) ──► [Linear(22, 64) → Tanh
+                Linear(64, 64)  → Tanh] ──► shared features (64-d)
+                                                  │
+                          ┌───────────────────────┤
+                          ▼                       ▼
+                   Actor head                Critic head
+                 Linear(64, 4)             Linear(64, 1)
+                   = mean(s)                  = V(s)
+                 + log_std (4-d param)
+```
+
+| Component | Detail |
+|-----------|--------|
+| Shared encoder | 2× Linear(→64) + Tanh |
+| Actor head | Linear(64, 4) = action mean |
+| log\_std | Learnable parameter (state-independent, 4-d) |
+| Critic head | Linear(64, 1) = state value V(s) |
+| Total params | 5,961 |
+| Initialisation | Orthogonal (gain=√2 encoder, 0.01 actor, 1.0 critic) |
+
+**Policy distribution**: $\pi(a|s) = \mathcal{N}(\mu(s),\, \text{diag}(\exp(\log\sigma)))$
+
+The 4 continuous action dimensions are:
+$[bid\_spread,\, ask\_spread,\, bid\_size,\, ask\_size]$
+
+#### 4.12.3 PPO Algorithm
+
+| Step | Description |
+|------|-------------|
+| 1 | Collect rollout of $T$ transitions using current policy |
+| 2 | Compute GAE advantages: $\hat{A}_t = \sum_{l=0}^{T-t-1} (\gamma\lambda)^l \delta_{t+l}$ |
+| 3 | Shuffle into $K$ minibatches |
+| 4 | For each epoch (default 10): clipped surrogate update |
+| 5 | Repeat from step 1 |
+
+**PPO clipped objective**:
+$$L^{CLIP} = \hat{\mathbb{E}}_t \left[\min\left(r_t(\theta)\hat{A}_t,\; \text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon)\hat{A}_t\right)\right]$$
+
+| Hyperparameter | Symbol | Default |
+|----------------|--------|---------|
+| Discount | $\gamma$ | 0.99 |
+| GAE λ | $\lambda$ | 0.95 |
+| Clip ε | $\epsilon$ | 0.2 |
+| Learning rate | $\eta$ | 3×10⁻⁴ |
+| Entropy coef | $c_1$ | 0.01 |
+| Value loss coef | $c_2$ | 0.5 |
+| Max grad norm | — | 0.5 |
+| Rollout steps | $T$ | 2048 |
+| Minibatches | $K$ | 32 |
+| Update epochs | — | 10 |
+
+#### 4.12.4 Training Pipeline
+
+The `train_baseline.py` script provides an end-to-end training loop:
+
+1. Initialise `LimitOrderBookEnv` with Normal Hawkes regime.
+2. Create `PPOAgent` with configurable hyperparameters.
+3. Train for N timesteps (default 10,000 for smoke test).
+4. Print per-update metrics (policy loss, value loss, entropy, KL, clip frac).
+5. Verify no NaN and bounded memory growth via `tracemalloc`.
+
+**Measured performance** (10k-step smoke test): ~895 steps/sec training
+throughput (includes forward pass, env step, backward pass, and PPO update).
+Memory growth: 81 KB over 10k steps (no leak).
+
+#### 4.12.5 Test Coverage (28 pytest cases)
+
+| Category         | Tests |
+|------------------|-------|
+| Reward function  | Quadratic penalty, γ configurable, zero-inventory, kwarg API |
+| ActorCritic      | Output shapes, batch shapes, value output, gradient flow, action evaluation, orthogonal init, learnable log\_std |
+| PPO agent        | Action bounds, rollout buffer fills, GAE finite, update metrics, param updates |
+| Behavioral skew  | Extreme long (+100), extreme short (−100), all-zeros, large values |
+| Training loop    | Short training (no crash/NaN), multi-episode rollouts |
+| Rollout buffer   | Reset, manual GAE verification, terminal state handling |
+| Determinism      | Same seed → same actions |
+| PPO config       | Default values, minibatch size computation |
+
 ---
 
 ## 5. Phase Tracker
@@ -470,7 +574,7 @@ On Windows with MinGW/UCRT64, `__init__.py` calls
 | 4     | Crypto Data Ingestion & Replay       | **Complete** |
 | 5     | Hawkes Process Market Simulator      | **Complete** |
 | 6     | Python Bindings & Gymnasium Env      | **Complete** |
-| 7     | Baseline RL Agent & Reward Shaping   | Planned     |
+| 7     | Baseline RL Agent & Reward Shaping   | **Complete** |
 | 8     | Risk-Constrained RL (Research Core)  | Planned     |
 | 9     | Evaluation & Diebold-Mariano Rigor   | Planned     |
 | 10    | Publication Artifacts & V1.0 Release | Planned     |
