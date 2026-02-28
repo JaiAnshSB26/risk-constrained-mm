@@ -15,6 +15,12 @@ Action space (Box, 4-dim continuous):
 
     - bid_spread / ask_spread: offset from mid-price in ticks (>= 1)
     - bid_size / ask_size: order quantity (>= 1)
+
+Reward function:
+    R_t = ΔPnL_t - γ · (Inventory_t)²
+
+    γ (inventory_aversion) defaults to 0.01 and is configurable via
+    EnvConfig.inventory_aversion or the `inventory_aversion` kwarg.
 """
 
 from __future__ import annotations
@@ -39,10 +45,20 @@ class LimitOrderBookEnv(gym.Env):
 
     metadata: dict[str, Any] = {"render_modes": []}
 
-    def __init__(self, config: EnvConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: EnvConfig | None = None,
+        *,
+        inventory_aversion: float | None = None,
+    ) -> None:
         super().__init__()
 
         self._config = config if config is not None else EnvConfig()
+
+        # Allow overriding γ from Python side.
+        if inventory_aversion is not None:
+            self._config.inventory_aversion = inventory_aversion
+
         self._env = MarketEnvironment(self._config)
 
         obs_dim = self._env.obs_size()

@@ -16,5 +16,6 @@ if sys.platform == "win32":
         os.add_dll_directory(_ucrt64_bin)
 
 from rcmm.env import LimitOrderBookEnv
+from rcmm._rcmm_core import EnvConfig
 
-__all__ = ["LimitOrderBookEnv"]
+__all__ = ["LimitOrderBookEnv", "EnvConfig"]
