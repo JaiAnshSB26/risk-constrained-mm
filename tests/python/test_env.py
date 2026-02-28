@@ -308,3 +308,63 @@ class TestZeroCopy:
 # ---------------------------------------------------------------------------
 # Performance benchmark
 # ---------------------------------------------------------------------------
+
+class TestPerformance:
+    """Throughput benchmark: must exceed 10,000 steps/second."""
+
+    @pytest.mark.slow
+    def test_10k_steps_per_second(self) -> None:
+        from rcmm._rcmm_core import EnvConfig
+        from rcmm.env import LimitOrderBookEnv
+
+        cfg = EnvConfig()
+        cfg.max_steps = 15000
+        cfg.ticks_per_step = 5
+        cfg.warmup_ticks = 100
+
+        e = LimitOrderBookEnv(config=cfg)
+        e.reset()
+
+        action = np.array([5.0, 5.0, 10.0, 10.0], dtype=np.float64)
+        n_steps = 10000
+
+        start = time.perf_counter()
+        for _ in range(n_steps):
+            obs, reward, done, truncated, info = e.step(action)
+            if done:
+                e.reset()
+        elapsed = time.perf_counter() - start
+
+        steps_per_sec = n_steps / elapsed
+        print(f"\n  Performance: {steps_per_sec:,.0f} steps/sec"
+              f" ({elapsed:.3f}s for {n_steps} steps)")
+        assert steps_per_sec > 10_000, (
+            f"Too slow: {steps_per_sec:.0f} steps/sec < 10,000 required"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Gymnasium compatibility
+# ---------------------------------------------------------------------------
+
+class TestGymnasium:
+    """Gymnasium API compliance checks."""
+
+    def test_is_gymnasium_env(self, env) -> None:
+        import gymnasium as gym
+        assert isinstance(env, gym.Env)
+
+    def test_observation_in_space(self, small_env) -> None:
+        obs, _ = small_env.reset()
+        assert small_env.observation_space.contains(obs)
+
+    def test_action_space_sample(self, env) -> None:
+        action = env.action_space.sample()
+        assert action.shape == (4,)
+        assert env.action_space.contains(action)
+
+    def test_step_with_sampled_action(self, small_env) -> None:
+        small_env.reset()
+        action = small_env.action_space.sample()
+        obs, reward, done, truncated, info = small_env.step(action)
+        assert obs.shape == (small_env.obs_dim,)
