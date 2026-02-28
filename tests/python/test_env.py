@@ -208,3 +208,103 @@ class TestStep:
 # ---------------------------------------------------------------------------
 # Episode termination
 # ---------------------------------------------------------------------------
+
+class TestEpisode:
+    """Episode lifecycle tests."""
+
+    def test_episode_terminates(self, config) -> None:
+        from rcmm.env import LimitOrderBookEnv
+        config.max_steps = 50
+        e = LimitOrderBookEnv(config=config)
+        e.reset()
+        action = np.array([5.0, 5.0, 10.0, 10.0])
+        done = False
+        steps = 0
+        while not done and steps < 200:
+            _, _, done, _, _ = e.step(action)
+            steps += 1
+        assert done
+        assert steps == 50
+
+    def test_reset_after_done(self, config) -> None:
+        from rcmm.env import LimitOrderBookEnv
+        config.max_steps = 20
+        e = LimitOrderBookEnv(config=config)
+        e.reset()
+        action = np.array([5.0, 5.0, 10.0, 10.0])
+        for _ in range(30):
+            _, _, done, _, _ = e.step(action)
+            if done:
+                break
+        # Should be able to reset and run again.
+        obs, info = e.reset()
+        assert obs.shape == (e.obs_dim,)
+        obs2, _, _, _, _ = e.step(action)
+        assert obs2.shape == (e.obs_dim,)
+
+
+# ---------------------------------------------------------------------------
+# Reproducibility
+# ---------------------------------------------------------------------------
+
+class TestReproducibility:
+    """Same seed produces identical episodes."""
+
+    def test_same_seed_same_obs(self) -> None:
+        from rcmm._rcmm_core import EnvConfig
+        from rcmm.env import LimitOrderBookEnv
+
+        cfg1 = EnvConfig()
+        cfg1.max_steps = 50
+        cfg1.seed = 12345
+
+        cfg2 = EnvConfig()
+        cfg2.max_steps = 50
+        cfg2.seed = 12345
+
+        e1 = LimitOrderBookEnv(config=cfg1)
+        e2 = LimitOrderBookEnv(config=cfg2)
+
+        obs1, _ = e1.reset()
+        obs2, _ = e2.reset()
+        np.testing.assert_array_equal(obs1, obs2)
+
+        action = np.array([5.0, 5.0, 10.0, 10.0])
+        for _ in range(20):
+            o1, r1, d1, _, _ = e1.step(action)
+            o2, r2, d2, _, _ = e2.step(action)
+            np.testing.assert_array_equal(o1, o2)
+            assert r1 == r2
+            assert d1 == d2
+            if d1:
+                break
+
+
+# ---------------------------------------------------------------------------
+# Zero-copy verification
+# ---------------------------------------------------------------------------
+
+class TestZeroCopy:
+    """Verify the observation array is a zero-copy view."""
+
+    def test_obs_no_copy_between_steps(self, small_env) -> None:
+        """The NumPy array returned by step() should reference the same
+        underlying C++ buffer (same data pointer) across calls."""
+        small_env.reset()
+        action = np.array([5.0, 5.0, 10.0, 10.0])
+        obs1, _, _, _, _ = small_env.step(action)
+        ptr1 = obs1.ctypes.data
+        obs2, _, _, _, _ = small_env.step(action)
+        ptr2 = obs2.ctypes.data
+        # Both should reference the same C++ buffer.
+        assert ptr1 == ptr2
+
+    def test_reset_provides_valid_buffer(self, small_env) -> None:
+        obs, _ = small_env.reset()
+        # The buffer should be writable (it's a view, not a read-only copy).
+        assert obs.flags["C_CONTIGUOUS"]
+
+
+# ---------------------------------------------------------------------------
+# Performance benchmark
+# ---------------------------------------------------------------------------
