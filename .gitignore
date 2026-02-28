@@ -65,6 +65,9 @@ data/cache/
 *.hdf5
 *.h5
 
+# ── Generated results (OOS evaluation outputs) ──────────────────────────────
+results/
+
 # ── Jupyter ──────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
 
