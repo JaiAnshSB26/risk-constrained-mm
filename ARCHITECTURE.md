@@ -562,6 +562,132 @@ Memory growth: 81 KB over 10k steps (no leak).
 | Determinism      | Same seed → same actions |
 | PPO config       | Default values, minibatch size computation |
 
+### 4.13 Risk-Constrained RL for Regime Shifts (Phase 8)
+
+Phase 8 is the research core: introducing **non-stationarity** (regime shifts)
+via domain randomization and modifying the PPO agent into a
+**Risk-Constrained PPO (CPPO)** that optimises expected return while
+explicitly penalising tail-risk via **Conditional Value at Risk (CVaR)**.
+
+#### 4.13.1 Domain Randomization — Regime Shifts
+
+On each `reset()`, the `RegimeRandomizationWrapper` (Gymnasium wrapper)
+randomly samples Hawkes process parameters from one of two regime
+distributions:
+
+| Regime | μ | α | β | Branching Ratio | buy_prob |
+|--------|---|---|---|-----------------|----------|
+| **Normal** (80%) | N(5.0, 0.5) | N(1.5, 0.3) | N(5.0, 0.5) | ≈ 0.30 | 0.50 |
+| **Flash Crash** (20%) | N(5.0, 0.5) | N(9.5, 0.5) | N(10.0, 0.5) | ≈ 0.95 | 0.15 |
+
+All parameters are clipped to valid ranges and **stationarity is enforced**:
+$\alpha < 0.98 \cdot \beta$ after sampling.
+
+The wrapper reconstructs the C++ `MarketEnvironment` on each reset with the
+sampled parameters, producing genuinely different market microstructure
+per episode.  The `info` dict includes regime name and Hawkes parameters
+for diagnostics.
+
+**Implementation**: `python/rcmm/regime_wrapper.py`
+- `RegimeSpec` dataclass — sampling distribution specification
+- `RegimeRandomizationWrapper(gym.Wrapper)` — the Gymnasium wrapper
+- Pre-defined: `NORMAL_REGIME_SPEC`, `FLASH_CRASH_REGIME_SPEC`
+
+#### 4.13.2 CVaR — Conditional Value at Risk
+
+CVaR (Expected Shortfall) quantifies the expected loss in the worst-α
+fraction of outcomes:
+
+$$\text{VaR}_\alpha = \inf\{ z : P(Z \le z) \ge \alpha \}$$
+$$\text{CVaR}_\alpha = \mathbb{E}[Z \mid Z \le \text{VaR}_\alpha]$$
+
+For a finite sample of rewards $Z = \{z_1, \ldots, z_n\}$:
+1. Sort in ascending order
+2. $k = \max(1, \lfloor n \cdot \alpha \rfloor)$
+3. $\text{VaR}_\alpha = z_{(k)}$
+4. $\text{CVaR}_\alpha = \frac{1}{|\{i : z_i \le \text{VaR}_\alpha\}|}
+   \sum_{i:\, z_i \le \text{VaR}_\alpha} z_i$
+
+**Properties verified by the test suite**:
+- $\text{CVaR}_\alpha \le \text{VaR}_\alpha$ (tail is more extreme)
+- $\text{CVaR}_\alpha \le \mathbb{E}[Z]$ (tail is worse than average)
+- Negative skew → more negative CVaR
+
+#### 4.13.3 CPPO — Constrained PPO Algorithm
+
+The CPPO agent extends baseline PPO with a Lagrangian CVaR constraint:
+
+$$\max_\theta\; \mathbb{E}[R(\tau)] \quad \text{s.t.}\; \text{CVaR}_\alpha(R) \ge d$$
+
+Relaxed via Lagrangian:
+
+$$L_{\text{CPPO}} = L_{\text{PPO}} + \lambda \cdot \max(0,\, d - \text{CVaR}_\alpha)$$
+
+The Lagrangian multiplier $\lambda$ adapts via dual gradient ascent:
+
+$$\lambda_{k+1} = \text{clamp}\!\left(\lambda_k + \eta_\lambda \cdot (d - \text{CVaR}_\alpha),\; 0,\; \lambda_{\max}\right)$$
+
+| When... | Effect |
+|---------|--------|
+| Tail risk exceeds threshold ($\text{CVaR} < d$) | $\lambda$ increases → stronger penalty |
+| Tail risk is acceptable ($\text{CVaR} \ge d$) | $\lambda$ decreases toward 0 |
+
+| CPPO Hyperparameter | Symbol | Default |
+|---------------------|--------|---------|
+| CVaR confidence | $\alpha$ | 0.05 |
+| CVaR threshold | $d$ | −10.0 |
+| Lagrange learning rate | $\eta_\lambda$ | 0.01 |
+| Initial $\lambda$ | — | 0.1 |
+| Max $\lambda$ | $\lambda_{\max}$ | 10.0 |
+
+**Implementation**: `python/rcmm/cppo.py`
+- `compute_cvar(rewards, alpha)` — empirical CVaR computation
+- `CPPOConfig(PPOConfig)` — extends PPO config with risk params
+- `CPPOAgent` — full training loop with CVaR diagnostics
+
+Network architecture is identical to baseline PPO (§4.12.2).
+
+#### 4.13.4 C++ pybind11 Extensions
+
+Phase 8 extends the pybind11 bindings to expose Hawkes parameters:
+
+| Binding | Fields |
+|---------|--------|
+| `HawkesParams` | `mu`, `alpha`, `beta`, `is_stationary()`, `branching_ratio()`, `expected_intensity()`, `__repr__` |
+| `MarkConfig` | `buy_prob`, `spread_mean`, `spread_std`, `qty_mean`, `qty_std`, `qty_lo`, `qty_hi` |
+| `EnvConfig` | `hawkes_params` (readwrite), `mark_config` (readwrite) |
+
+This allows Python-level regime randomization without C++ recompilation.
+
+#### 4.13.5 Evaluation: PPO vs CPPO on Flash Crash
+
+`python/scripts/evaluate_regimes.py` trains both agents on regime-randomized
+environments and evaluates exclusively on Flash Crash conditions
+(α=9.5, β=10.0, buy\_prob=0.15).
+
+| Metric | Description |
+|--------|-------------|
+| Max Drawdown | $\max_t (\text{peak}_{0:t} - \text{PnL}_t)$ |
+| Sharpe Ratio | $\frac{\mathbb{E}[R]}{\text{std}(R)}$ |
+| CVaR | Bottom-20% average of episode returns |
+| Avg Return | Mean episodic PnL |
+
+**Expected result**: CPPO exhibits lower max drawdown and better CVaR
+under flash crash, at the cost of slightly lower average return — a
+classic risk-return trade-off.
+
+#### 4.13.6 Test Coverage (37 pytest cases)
+
+| Category | Tests |
+|----------|-------|
+| CVaR math | Known arrays (5%, 20%, 50%), all-same, single, CVaR≤VaR, CVaR≤mean, negative skew |
+| Domain randomization | Regime info, param variation, stationarity, distribution, sell pressure, step-after-reset, custom spec, seed reproducibility |
+| CPPO agent | Action validity, gradient flow, CVaR metrics, λ increase on violation, λ stays 0 on no violation, param updates |
+| CPPO training | Short loop (no NaN), regime-wrapped training, Lagrange trajectory |
+| Eval helpers | Max drawdown (known, monotonic up/down, empty), Sharpe (positive, zero-std, single) |
+| Bindings | HawkesParams roundtrip, EnvConfig integration, MarkConfig, __repr__ |
+| Config | CPPOConfig inherits PPO defaults |
+
 ---
 
 ## 5. Phase Tracker
@@ -575,7 +701,7 @@ Memory growth: 81 KB over 10k steps (no leak).
 | 5     | Hawkes Process Market Simulator      | **Complete** |
 | 6     | Python Bindings & Gymnasium Env      | **Complete** |
 | 7     | Baseline RL Agent & Reward Shaping   | **Complete** |
-| 8     | Risk-Constrained RL (Research Core)  | Planned     |
+| 8     | Risk-Constrained RL (Research Core)  | **Complete** |
 | 9     | Evaluation & Diebold-Mariano Rigor   | Planned     |
 | 10    | Publication Artifacts & V1.0 Release | Planned     |
 
