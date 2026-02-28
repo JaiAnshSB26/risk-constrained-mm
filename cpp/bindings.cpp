@@ -59,6 +59,7 @@ PYBIND11_MODULE(_rcmm_core, m) {
         .def_readwrite("max_inventory",  &rcmm::EnvConfig::max_inventory)
         .def_readwrite("max_pnl",        &rcmm::EnvConfig::max_pnl)
         .def_readwrite("max_volume",     &rcmm::EnvConfig::max_volume)
+        .def_readwrite("inventory_aversion", &rcmm::EnvConfig::inventory_aversion)
         .def_readwrite("seed",           &rcmm::EnvConfig::seed);
 
     // ── StepResult ──────────────────────────────────────────────────────────
