@@ -286,3 +286,117 @@ TEST_CASE("Hawkes: marks - is_trade flag matches action",
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  Reproducibility & Edge Cases
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("Hawkes: same seed produces identical output",
+          "[hawkes][repro]") {
+    HawkesSimulator sim1(NORMAL_REGIME, {}, 42);
+    HawkesSimulator sim2(NORMAL_REGIME, {}, 42);
+
+    auto t1 = sim1.simulate(500, 1000);
+    auto t2 = sim2.simulate(500, 1000);
+
+    REQUIRE(t1.size() == t2.size());
+    for (std::size_t i = 0; i < t1.size(); ++i) {
+        CHECK(t1[i].timestamp == t2[i].timestamp);
+        CHECK(t1[i].order_id  == t2[i].order_id);
+        CHECK(t1[i].price     == t2[i].price);
+        CHECK(t1[i].qty       == t2[i].qty);
+        CHECK(t1[i].side      == t2[i].side);
+        CHECK(t1[i].action    == t2[i].action);
+    }
+}
+
+TEST_CASE("Hawkes: reseed produces different output",
+          "[hawkes][repro]") {
+    HawkesSimulator sim(NORMAL_REGIME, {}, 42);
+    auto t1 = sim.simulate(100, 0);
+
+    sim.seed(99);
+    auto t2 = sim.simulate(100, 0);
+
+    // Extremely unlikely for all 100 timestamps to match.
+    bool all_same = true;
+    for (std::size_t i = 0; i < t1.size(); ++i) {
+        if (t1[i].timestamp != t2[i].timestamp) {
+            all_same = false;
+            break;
+        }
+    }
+    CHECK_FALSE(all_same);
+}
+
+TEST_CASE("Hawkes: start_timestamp offset is applied",
+          "[hawkes][edge]") {
+    Timestamp offset = 1'000'000'000'000LL;  // 1000 seconds in ns
+    HawkesSimulator sim(NORMAL_REGIME, {}, 42);
+    auto ticks = sim.simulate(100, offset);
+
+    REQUIRE(ticks.size() == 100u);
+    CHECK(ticks[0].timestamp >= offset);
+    CHECK(ticks[99].timestamp > ticks[0].timestamp);
+}
+
+TEST_CASE("Hawkes: small simulation (10 events) still works",
+          "[hawkes][edge]") {
+    HawkesSimulator sim(NORMAL_REGIME, {}, 42);
+    auto ticks = sim.simulate(10, 0);
+
+    REQUIRE(ticks.size() == 10u);
+    for (std::size_t i = 1; i < ticks.size(); ++i) {
+        CHECK(ticks[i].timestamp > ticks[i - 1].timestamp);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Inter-arrival time statistics
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("Hawkes: Normal regime - all inter-arrival times positive",
+          "[hawkes][stats]") {
+    HawkesSimulator sim(NORMAL_REGIME, {}, 42);
+    auto ticks = sim.simulate(10000, 0);
+
+    for (std::size_t i = 1; i < ticks.size(); ++i) {
+        CHECK(ticks[i].timestamp - ticks[i - 1].timestamp > 0);
+    }
+}
+
+TEST_CASE("Hawkes: Flash crash - all inter-arrival times positive",
+          "[hawkes][stats]") {
+    HawkesSimulator sim(FLASH_CRASH_REGIME, {}, 42);
+    auto ticks = sim.simulate(10000, 0);
+
+    for (std::size_t i = 1; i < ticks.size(); ++i) {
+        CHECK(ticks[i].timestamp - ticks[i - 1].timestamp > 0);
+    }
+}
+
+TEST_CASE("Hawkes: Flash crash mean inter-arrival < normal mean inter-arrival",
+          "[hawkes][stats]") {
+    HawkesSimulator sim_n(NORMAL_REGIME, {}, 42);
+    HawkesSimulator sim_f(FLASH_CRASH_REGIME, {}, 42);
+
+    auto tn = sim_n.simulate(10000, 0);
+    auto tf = sim_f.simulate(10000, 0);
+
+    // Mean inter-arrival in nanoseconds.
+    double normal_mean = 0.0;
+    for (std::size_t i = 1; i < tn.size(); ++i) {
+        normal_mean += static_cast<double>(
+            tn[i].timestamp - tn[i - 1].timestamp);
+    }
+    normal_mean /= static_cast<double>(tn.size() - 1u);
+
+    double flash_mean = 0.0;
+    for (std::size_t i = 1; i < tf.size(); ++i) {
+        flash_mean += static_cast<double>(
+            tf[i].timestamp - tf[i - 1].timestamp);
+    }
+    flash_mean /= static_cast<double>(tf.size() - 1u);
+
+    // Flash crash should have smaller mean inter-arrival time.
+    CHECK(flash_mean < normal_mean);
+}
