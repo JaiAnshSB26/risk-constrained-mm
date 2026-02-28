@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "risk-constrained-mm"
-version = "0.1.0"
+version = "1.0.0"
 description = "Risk-Constrained RL Market-Making Agent on a High-Performance C++ LOB"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ authors = [
     {name = "Risk-Constrained MM Team"},
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "Programming Language :: C++",
     "Programming Language :: Python :: 3",
@@ -26,6 +26,8 @@ dependencies = [
     "torch>=2.1",
     "pandas>=2.1",
     "scipy>=1.11",
+    "matplotlib>=3.7",
+    "seaborn>=0.13",
 ]
 
 [project.optional-dependencies]
