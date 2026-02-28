@@ -87,7 +87,30 @@ include(CTest)
 include(Catch)
 catch_discover_tests(unit_tests)
 
-# ── Python module (Phase 6 — placeholder) ───────────────────────────────────
-# Uncomment when pybind11 bindings are ready:
-# pybind11_add_module(lob_gym python/bindings/module.cpp)
-# target_link_libraries(lob_gym PRIVATE lob_core)
+# ── Python module (Phase 6) ──────────────────────────────────────────────────
+# pybind11 extension module: _rcmm_core.pyd / _rcmm_core.so
+# This is the zero-copy bridge between the C++ matching engine and Python.
+pybind11_add_module(_rcmm_core cpp/bindings.cpp)
+target_link_libraries(_rcmm_core PRIVATE lob_core)
+target_include_directories(_rcmm_core PRIVATE cpp/include)
+
+# Apply strict warnings to the bindings too, but we must allow exceptions
+# for pybind11 (it uses them internally for type conversion errors).
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(_rcmm_core PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+        -Wconversion -Wsign-conversion -Wshadow
+        -Wnon-virtual-dtor -Wcast-align
+        -Woverloaded-virtual -Wformat=2
+        # NOTE: no -fno-exceptions — pybind11 needs exceptions
+        # NOTE: no -Wold-style-cast — pybind11 macros use C-style casts
+    )
+endif()
+
+# Copy the built module to python/rcmm/ so it's importable in-tree.
+add_custom_command(TARGET _rcmm_core POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+        $<TARGET_FILE:_rcmm_core>
+        ${CMAKE_SOURCE_DIR}/python/rcmm/$<TARGET_FILE_NAME:_rcmm_core>
+    COMMENT "Copying _rcmm_core module to python/rcmm/"
+)
