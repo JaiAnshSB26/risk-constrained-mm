@@ -365,6 +365,99 @@ ensuring full compatibility with the LOB pipeline.
 | Repro      | Same seed → identical output; reseed → different output        |
 | Edge       | Small simulations (10 events); timestamp offset                |
 
+### 4.11 Python Bindings & Gymnasium Environment (Phase 6)
+
+Phase 6 bridges the C++ matching engine to Python for RL training via
+pybind11, with a **strict zero-copy** observation strategy.
+
+#### 4.11.1 Architecture Overview
+
+```
+Python (gymnasium.Env)           C++ (pybind11 module)
+┌──────────────────────┐        ┌──────────────────────────────┐
+│  LimitOrderBookEnv   │ ─────▶ │     MarketEnvironment        │
+│                      │        │  ┌──────────┐ ┌───────────┐  │
+│  obs_space (Box)     │        │  │OrderBook │ │ Hawkes    │  │
+│  act_space (Box)     │        │  │(matching)│ │ Simulator │  │
+│                      │        │  └──────────┘ └───────────┘  │
+│  step(action)────────│───────▶│  step(bid_s, ask_s, ...)     │
+│    → (obs, r, d, t, i)       │    → obs_buffer_ (zero-copy) │
+└──────────────────────┘        └──────────────────────────────┘
+```
+
+#### 4.11.2 Zero-Copy Observation Buffer
+
+The `MarketEnvironment` class holds a **pre-allocated `std::vector<double>`**
+of size $4N + 2$ (where $N$ = `obs_depth`, default 5).  This buffer is
+allocated once at construction and reused every `step()` call.
+
+**Buffer layout** ($N = 5 \Rightarrow 22$ doubles):
+
+| Index     | Content                                    |
+|-----------|--------------------------------------------|
+| 0–1       | Best bid: (normalised\_price, norm\_vol)   |
+| 2–3       | 2nd bid level                              |
+| …         | …                                          |
+| 8–9       | 5th bid level                              |
+| 10–11     | Best ask: (normalised\_price, norm\_vol)   |
+| …         | …                                          |
+| 18–19     | 5th ask level                              |
+| 20        | Normalised inventory (inv / max\_inventory)|
+| 21        | Normalised PnL (pnl / max\_pnl)           |
+
+**pybind11 bridge**: The C++ pointer is exposed to Python as a
+`pybind11::array_t<double>` with a no-op capsule destructor.  The NumPy
+array returned to Python is a **view** — no `memcpy`, no heap allocation.
+
+#### 4.11.3 Step Protocol
+
+Each `step(bid_spread, ask_spread, bid_size, ask_size)` call:
+
+1. **Cancel** the agent's previous bid/ask quotes.
+2. **Place** new limit orders at `mid ± spread × tick_size`.
+3. **Advance** the Hawkes simulation by `ticks_per_step` market events.
+4. **Detect fills** on agent orders; update inventory and PnL.
+5. **Fill** the observation buffer (zero allocation).
+6. **Compute reward**: $\Delta(\text{mark-to-market}) - 0.01 \cdot \text{inventory}^2$.
+
+Agent order IDs start at 10,000,000 to avoid collision with
+simulator-generated IDs.
+
+#### 4.11.4 Gymnasium Wrapper
+
+`LimitOrderBookEnv(gymnasium.Env)` in `python/rcmm/env.py`:
+
+| Property             | Value                                     |
+|----------------------|-------------------------------------------|
+| `observation_space`  | `Box(-inf, inf, shape=(22,), float64)`    |
+| `action_space`       | `Box([1,1,1,1], [20,20,50,50], float64)` |
+| `reset()`            | Returns `(obs, info)` per Gymnasium v1    |
+| `step(action)`       | Returns `(obs, reward, term, trunc, info)`|
+
+#### 4.11.5 Build & Module Delivery
+
+CMake compiles `cpp/bindings.cpp` via `pybind11_add_module(_rcmm_core …)`,
+producing `_rcmm_core.cp3XX-win_amd64.pyd` (or `.so` on Linux).  A
+`POST_BUILD` custom command copies the artifact into `python/rcmm/` for
+in-tree import.
+
+On Windows with MinGW/UCRT64, `__init__.py` calls
+`os.add_dll_directory(r"C:\msys64\ucrt64\bin")` to resolve the GCC runtime.
+
+#### 4.11.6 Test Coverage (30 pytest cases)
+
+| Category        | Tests                                                    |
+|-----------------|----------------------------------------------------------|
+| Import          | C++ module, env wrapper, package                         |
+| Spaces          | obs shape/dtype, action shape/dtype/bounds               |
+| Reset           | Return type, obs shape, info dict, finiteness            |
+| Step            | 5-tuple, obs shape, reward type, terminated/truncated    |
+| Episode         | Termination at max\_steps, reset-after-done              |
+| Reproducibility | Same seed → identical trajectories                       |
+| Zero-copy       | Stable data pointer across steps                         |
+| Performance     | >10k steps/sec (measured: ~150k steps/sec)               |
+| Gymnasium       | isinstance(env, gym.Env), space containment              |
+
 ---
 
 ## 5. Phase Tracker
@@ -376,7 +469,7 @@ ensuring full compatibility with the LOB pipeline.
 | 3     | Matching Engine Core                   | **Complete** |
 | 4     | Crypto Data Ingestion & Replay       | **Complete** |
 | 5     | Hawkes Process Market Simulator      | **Complete** |
-| 6     | Python Bindings & Gymnasium Env      | Planned     |
+| 6     | Python Bindings & Gymnasium Env      | **Complete** |
 | 7     | Baseline RL Agent & Reward Shaping   | Planned     |
 | 8     | Risk-Constrained RL (Research Core)  | Planned     |
 | 9     | Evaluation & Diebold-Mariano Rigor   | Planned     |

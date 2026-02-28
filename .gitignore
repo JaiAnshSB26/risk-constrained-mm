@@ -42,6 +42,11 @@ pip-delete-this-directory.txt
 .venv/
 venv/
 
+# ── Compiled pybind11 modules (built by CMake, not committed) ────────────────
+*.pyd
+*.so
+python/rcmm/_rcmm_core*
+
 # ── PyTorch / ML artifacts ───────────────────────────────────────────────────
 *.pt
 *.pth
