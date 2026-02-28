@@ -688,6 +688,121 @@ classic risk-return trade-off.
 | Bindings | HawkesParams roundtrip, EnvConfig integration, MarkConfig, __repr__ |
 | Config | CPPOConfig inherits PPO defaults |
 
+### 4.14 Evaluation & Diebold-Mariano Rigor (Phase 9)
+
+Phase 9 proves statistical significance by pitting the CPPO agent against
+a classical mathematical baseline on out-of-sample data and applying the
+Diebold-Mariano test to the PnL differentials.
+
+#### 4.14.1 Avellaneda-Stoikov Baseline Agent
+
+A deterministic, non-learning market-making strategy based on the
+Avellaneda-Stoikov (2008) model.  No neural networks — just closed-form
+reservation-price mathematics.
+
+**Reservation price** (inventory-adjusted mid):
+
+$$r(s, q) = s - q \cdot \gamma \cdot \sigma^2$$
+
+**Optimal spread**:
+
+$$\delta = \gamma \cdot \sigma^2 + \frac{2}{\gamma} \cdot \ln\!\left(1 + \frac{\gamma}{\kappa}\right)$$
+
+**Quotes**:
+
+$$\text{bid} = r - \delta/2 \qquad \text{ask} = r + \delta/2$$
+
+| Symbol | Meaning | Default |
+|--------|---------|---------|
+| $s$ | Mid-price | from obs |
+| $q$ | Inventory (signed) | from obs |
+| $\gamma$ | Risk aversion | 0.1 |
+| $\sigma$ | Volatility estimate | 2.0 |
+| $\kappa$ | Order arrival intensity | 1.5 |
+
+**Key properties**:
+- Zero inventory → symmetric spread (bid = ask distance from mid).
+- Long inventory → wider bid / tighter ask (skew to sell).
+- Short inventory → tighter bid / wider ask (skew to buy).
+
+**Implementation**: `python/rcmm/baselines.py`
+- `AvellanedaStoikovConfig` — dataclass with all parameters
+- `AvellanedaStoikovAgent` — `select_action(obs)` matching PPO/CPPO interface
+
+Reference: Avellaneda, M. & Stoikov, S. (2008).
+"High-Frequency Trading in a Limit Order Book."
+*Quantitative Finance*, 8(3), 217–224.
+
+#### 4.14.2 Diebold-Mariano Test
+
+The DM test (Diebold & Mariano, 1995) tests whether two forecasting /
+trading strategies have equal predictive accuracy.
+
+Let $d_t = r_{CPPO,t} - r_{Baseline,t}$ be the return differential at step $t$.
+
+$$H_0: \mathbb{E}[d_t] = 0 \qquad \text{(no performance difference)}$$
+
+**DM statistic**:
+
+$$DM = \frac{\bar{d}}{\sqrt{\hat{V}(\bar{d})}}$$
+
+**Newey-West HAC variance** (accounts for autocorrelation):
+
+$$\hat{V}(\bar{d}) = \frac{1}{T}\left[\hat{\gamma}(0) + 2\sum_{\tau=1}^{h}\hat{\gamma}(\tau)\right]$$
+
+where $\hat{\gamma}(\tau) = \frac{1}{T}\sum_{t=|\tau|+1}^{T}(d_t - \bar{d})(d_{t-|\tau|} - \bar{d})$
+
+| Parameter | Value |
+|-----------|-------|
+| Truncation lag $h$ | $\lfloor T^{1/3} \rfloor$ (default) |
+| Distribution | $DM \xrightarrow{d} \mathcal{N}(0,1)$ |
+| Two-sided p-value | $p = 2\Phi(-|DM|)$ |
+
+**Robustness**: The implementation handles degenerate cases (zero variance,
+constant differentials, very short series) without division-by-zero errors.
+
+**Implementation**: `python/rcmm/stats.py`
+- `diebold_mariano(pnl_1, pnl_2, h=None, one_sided=False) → (dm_stat, p_value)`
+
+Reference: Diebold, F.X. & Mariano, R.S. (1995).
+"Comparing Predictive Accuracy."
+*Journal of Business & Economic Statistics*, 13(3), 253–263.
+
+#### 4.14.3 Out-of-Sample Evaluation Pipeline
+
+`python/scripts/evaluate_oos.py` implements the full OOS evaluation:
+
+| Step | Description |
+|------|-------------|
+| 1 | Generate synthetic OOS CSV (10,000 ticks) via `generate_oos_csv()` |
+| 2 | Train CPPO agent on regime-randomised environment |
+| 3 | Create OOS environment (Flash Crash regime: α=9.0, β=10.0, buy_prob=0.2) |
+| 4 | Run CPPO and AS baseline on same OOS environment |
+| 5 | Collect step-by-step PnL for both agents |
+| 6 | Apply Diebold-Mariano test to PnL differentials |
+| 7 | Export trajectories to `results/oos_trajectories.csv` (pandas DataFrame) |
+
+**CSV output columns**: step, cppo\_reward, baseline\_reward,
+cppo\_cumulative\_pnl, baseline\_cumulative\_pnl, differential.
+
+#### 4.14.4 Test Coverage (37 pytest cases)
+
+| Category | Tests |
+|----------|-------|
+| AS interface | Action shape, log\_prob/value tensors, finiteness (5) |
+| AS symmetry | Zero-inventory symmetric spreads, positive spread (2) |
+| AS inventory skew | Long/short wider bid/ask, larger inventory → larger skew, get\_spreads (6) |
+| AS bounds | Extreme +/− inventory clamped, fixed order size (3) |
+| AS determinism | Same obs → same action (1) |
+| AS config | γ wider spread, σ wider spread, default values (3) |
+| AS integration | Full episode through environment (1) |
+| DM core | Clear outperformance p<0.05, underperformance, identical, no-diff (4) |
+| DM symmetry | Swap negates statistic, equal p-values (1) |
+| DM edge cases | Too-short raises, different-lengths raises, T=2, constant, zero-diff, no-ZeroDivision (6) |
+| DM one-sided | Positive direction, wrong direction (2) |
+| DM HAC variance | Custom lag, large lag (2) |
+| DM math validation | Manual hand-computed reference (1) |
+
 ---
 
 ## 5. Phase Tracker
@@ -702,7 +817,7 @@ classic risk-return trade-off.
 | 6     | Python Bindings & Gymnasium Env      | **Complete** |
 | 7     | Baseline RL Agent & Reward Shaping   | **Complete** |
 | 8     | Risk-Constrained RL (Research Core)  | **Complete** |
-| 9     | Evaluation & Diebold-Mariano Rigor   | Planned     |
+| 9     | Evaluation & Diebold-Mariano Rigor   | **Complete** |
 | 10    | Publication Artifacts & V1.0 Release | Planned     |
 
 ---
