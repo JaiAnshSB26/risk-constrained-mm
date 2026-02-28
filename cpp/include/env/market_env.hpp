@@ -65,6 +65,9 @@ struct EnvConfig {
     double max_pnl        = 1e6;    // for obs normalisation
     double max_volume     = 100.0;  // volume normalisation denominator
 
+    // Reward shaping.
+    double inventory_aversion = 0.01;  // γ in R_t = ΔPnL_t - γ·(Inventory_t)²
+
     // Hawkes simulator.
     HawkesParams hawkes_params = NORMAL_REGIME;
     MarkConfig   mark_config   = {};
@@ -219,12 +222,14 @@ public:
         bool done = (step_count_ >= cfg_.max_steps) ||
                     (tick_cursor_ >= ticks_.size());
 
-        // Reward: PnL change + inventory penalty.
+        // Reward: R_t = ΔPnL_t - γ · (Inventory_t)²
+        // where ΔPnL_t = (mark_to_market_t - mark_to_market_{t-1})
         double mid_d = static_cast<double>(compute_mid());
         double mark_to_market = pnl_ + inventory_ * mid_d;
-        double inv_penalty = -0.01 * inventory_ * inventory_;
-        double reward = mark_to_market + inv_penalty - prev_mtm_;
-        prev_mtm_ = mark_to_market + inv_penalty;
+        double delta_pnl = mark_to_market - prev_mtm_;
+        double inv_penalty = cfg_.inventory_aversion * inventory_ * inventory_;
+        double reward = delta_pnl - inv_penalty;
+        prev_mtm_ = mark_to_market;
 
         StepResult result;
         result.obs_data  = obs_buffer_.data();
