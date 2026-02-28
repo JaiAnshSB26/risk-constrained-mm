@@ -46,6 +46,33 @@ static py::array_t<double> make_obs_view(rcmm::MarketEnvironment& env) {
 PYBIND11_MODULE(_rcmm_core, m) {
     m.doc() = "C++ core for the risk-constrained market-making environment";
 
+    // ── HawkesParams ────────────────────────────────────────────────────────
+    py::class_<rcmm::HawkesParams>(m, "HawkesParams")
+        .def(py::init<>())
+        .def_readwrite("mu",    &rcmm::HawkesParams::mu)
+        .def_readwrite("alpha", &rcmm::HawkesParams::alpha)
+        .def_readwrite("beta",  &rcmm::HawkesParams::beta)
+        .def("is_stationary",   &rcmm::HawkesParams::is_stationary)
+        .def("branching_ratio", &rcmm::HawkesParams::branching_ratio)
+        .def("expected_intensity", &rcmm::HawkesParams::expected_intensity)
+        .def("__repr__", [](const rcmm::HawkesParams& p) {
+            return "HawkesParams(mu=" + std::to_string(p.mu)
+                 + ", alpha=" + std::to_string(p.alpha)
+                 + ", beta=" + std::to_string(p.beta) + ")";
+        });
+
+    // ── MarkConfig ──────────────────────────────────────────────────────────
+    py::class_<rcmm::MarkConfig>(m, "MarkConfig")
+        .def(py::init<>())
+        .def_readwrite("mid_price",    &rcmm::MarkConfig::mid_price)
+        .def_readwrite("half_spread",  &rcmm::MarkConfig::half_spread)
+        .def_readwrite("min_qty",      &rcmm::MarkConfig::min_qty)
+        .def_readwrite("max_qty",      &rcmm::MarkConfig::max_qty)
+        .def_readwrite("buy_prob",     &rcmm::MarkConfig::buy_prob)
+        .def_readwrite("add_prob",     &rcmm::MarkConfig::add_prob)
+        .def_readwrite("cancel_prob",  &rcmm::MarkConfig::cancel_prob)
+        .def_readwrite("trade_prob",   &rcmm::MarkConfig::trade_prob);
+
     // ── EnvConfig ───────────────────────────────────────────────────────────
     py::class_<rcmm::EnvConfig>(m, "EnvConfig")
         .def(py::init<>())
@@ -60,6 +87,8 @@ PYBIND11_MODULE(_rcmm_core, m) {
         .def_readwrite("max_pnl",        &rcmm::EnvConfig::max_pnl)
         .def_readwrite("max_volume",     &rcmm::EnvConfig::max_volume)
         .def_readwrite("inventory_aversion", &rcmm::EnvConfig::inventory_aversion)
+        .def_readwrite("hawkes_params",  &rcmm::EnvConfig::hawkes_params)
+        .def_readwrite("mark_config",    &rcmm::EnvConfig::mark_config)
         .def_readwrite("seed",           &rcmm::EnvConfig::seed);
 
     // ── StepResult ──────────────────────────────────────────────────────────
