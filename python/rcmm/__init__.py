@@ -16,6 +16,21 @@ if sys.platform == "win32":
         os.add_dll_directory(_ucrt64_bin)
 
 from rcmm.env import LimitOrderBookEnv
-from rcmm._rcmm_core import EnvConfig
+from rcmm._rcmm_core import EnvConfig, HawkesParams, MarkConfig
+from rcmm.regime_wrapper import (
+    RegimeRandomizationWrapper,
+    RegimeSpec,
+    NORMAL_REGIME_SPEC,
+    FLASH_CRASH_REGIME_SPEC,
+)
 
-__all__ = ["LimitOrderBookEnv", "EnvConfig"]
+__all__ = [
+    "LimitOrderBookEnv",
+    "EnvConfig",
+    "HawkesParams",
+    "MarkConfig",
+    "RegimeRandomizationWrapper",
+    "RegimeSpec",
+    "NORMAL_REGIME_SPEC",
+    "FLASH_CRASH_REGIME_SPEC",
+]
