@@ -818,7 +818,7 @@ cppo\_cumulative\_pnl, baseline\_cumulative\_pnl, differential.
 | 7     | Baseline RL Agent & Reward Shaping   | **Complete** |
 | 8     | Risk-Constrained RL (Research Core)  | **Complete** |
 | 9     | Evaluation & Diebold-Mariano Rigor   | **Complete** |
-| 10    | Publication Artifacts & V1.0 Release | Planned     |
+| 10    | Publication Artifacts & V1.0 Release | **Complete** |
 
 ---
 
