@@ -274,6 +274,8 @@ TEST_CASE("Hawkes: marks - action distribution roughly matches config",
     CHECK(can_r < 0.24);
     CHECK(trd_r > 0.16);
     CHECK(trd_r < 0.24);
+    // modify_prob = 0.0, so no Modify ticks should be emitted
+    CHECK(modifies == 0);
 }
 
 TEST_CASE("Hawkes: marks - is_trade flag matches action",
