@@ -8,7 +8,7 @@
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)]()
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)]()
 [![Tests](https://img.shields.io/badge/tests-265%20passed-brightgreen)]()
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)]()
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-orange)]()
 
 *Zero-allocation C++ matching engine · Hawkes process simulator · Constrained PPO with CVaR · Diebold-Mariano statistical testing*
